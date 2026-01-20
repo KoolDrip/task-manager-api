@@ -1,8 +1,10 @@
 # Task Manager API
 
-[![CI Pipeline](https://github.com/KoolDrip/task-manager-api/actions/workflows/ci.yml/badge.svg)](https://github.com/KoolDrip/task-manager-api/actions/workflows/ci.yml)
-[![CD Pipeline](https://github.com/KoolDrip/task-manager-api/actions/workflows/cd.yml/badge.svg)](https://github.com/KoolDrip/task-manager-api/actions/workflows/cd.yml)
-[![Docker Hub](https://img.shields.io/badge/DockerHub-task--manager--api-blue)](https://hub.docker.com/r/kooldrip/task-manager-api)
+![CI Pipeline](https://github.com/KoolDrip/task-manager-api/actions/workflows/ci.yml/badge.svg)
+![CD Pipeline](https://github.com/KoolDrip/task-manager-api/actions/workflows/cd.yml/badge.svg)
+[![Docker Hub](https://img.shields.io/badge/Docker%20Hub-jenish005%2Ftask--manager--api-blue?logo=docker)](https://hub.docker.com/r/jenish005/task-manager-api)
+![Java](https://img.shields.io/badge/Java-17-orange)
+![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.2-green)
 
 A production-grade **Task Manager REST API** built with **Spring Boot**, featuring a comprehensive **CI/CD pipeline** using **GitHub Actions** with integrated **security scanning**, **quality gates**, and **containerization**.
 
