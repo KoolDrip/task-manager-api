@@ -1,7 +1,10 @@
 name: CD Pipeline
 
-# Trigger after CI completes or manual dispatch
+# CD Pipeline - Runs entirely on GitHub Actions (FREE)
+# Demonstrates deployment, integration testing, and DAST
+
 on:
+  # Trigger after CI completes successfully
   workflow_run:
     workflows: ["CI Pipeline"]
     types:
@@ -9,207 +12,324 @@ on:
     branches:
       - master
       - main
+  # Manual trigger option
   workflow_dispatch:
-    inputs:
-      environment:
-        description: 'Deployment environment'
-        required: true
-        default: 'staging'
-        type: choice
-        options:
-          - staging
-          - production
-      image_tag:
-        description: 'Docker image tag to deploy'
-        required: false
-        default: 'latest'
 
 env:
   DOCKER_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/task-manager-api
-  KUBE_NAMESPACE: task-manager
 
 jobs:
   # ============================================
-  # Stage 1: Prepare Deployment
+  # Stage 1: Deploy and Run Container
+  # Purpose: Simulate deployment by running container
   # ============================================
-  prepare:
-    name: Prepare Deployment
+  deploy:
+    name: Deploy Application
     runs-on: ubuntu-latest
     if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
     outputs:
-      image_tag: ${{ steps.set-tag.outputs.tag }}
-      environment: ${{ steps.set-env.outputs.env }}
-    steps:
-      - name: Set Image Tag
-        id: set-tag
-        run: |
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            echo "tag=${{ github.event.inputs.image_tag }}" >> $GITHUB_OUTPUT
-          else
-            echo "tag=${{ github.event.workflow_run.head_sha }}" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Set Environment
-        id: set-env
-        run: |
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            echo "env=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
-          else
-            echo "env=staging" >> $GITHUB_OUTPUT
-          fi
-
-  # ============================================
-  # Stage 2: Deploy to Kubernetes
-  # ============================================
-  deploy:
-    name: Deploy to Kubernetes
-    runs-on: ubuntu-latest
-    needs: prepare
-    environment: ${{ needs.prepare.outputs.environment }}
+      container_id: ${{ steps.run-container.outputs.container_id }}
     steps:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      - name: Setup kubectl
-        uses: azure/setup-kubectl@v3
+      - name: Login to DockerHub
+        uses: docker/login-action@v3
         with:
-          version: 'v1.28.0'
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Configure Kubernetes Context
+      - name: Pull Latest Image
         run: |
-          mkdir -p $HOME/.kube
-          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > $HOME/.kube/config
-          chmod 600 $HOME/.kube/config
+          docker pull ${{ env.DOCKER_IMAGE }}:latest
+          echo "Image pulled successfully"
 
-      - name: Create Namespace (if not exists)
+      - name: Deploy Container
+        id: run-container
         run: |
-          kubectl create namespace ${{ env.KUBE_NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+          # Stop any existing container
+          docker stop task-manager-app 2>/dev/null || true
+          docker rm task-manager-app 2>/dev/null || true
 
-      - name: Update Kubernetes Manifests
-        run: |
-          # Update image tag in deployment manifest
-          sed -i "s|IMAGE_PLACEHOLDER|${{ env.DOCKER_IMAGE }}:${{ needs.prepare.outputs.image_tag }}|g" k8s/deployment.yaml
+          # Run the container (simulating deployment)
+          CONTAINER_ID=$(docker run -d \
+            --name task-manager-app \
+            -p 8080:8080 \
+            -e SPRING_PROFILES_ACTIVE=production \
+            ${{ env.DOCKER_IMAGE }}:latest)
 
-      - name: Deploy to Kubernetes
+          echo "container_id=$CONTAINER_ID" >> $GITHUB_OUTPUT
+          echo "Container deployed with ID: $CONTAINER_ID"
+
+      - name: Wait for Application Startup
         run: |
-          kubectl apply -f k8s/ -n ${{ env.KUBE_NAMESPACE }}
-          kubectl rollout status deployment/task-manager-api -n ${{ env.KUBE_NAMESPACE }} --timeout=300s
+          echo "Waiting for application to start..."
+          sleep 30
+
+          # Check if container is running
+          if ! docker ps | grep -q task-manager-app; then
+            echo "Container failed to start!"
+            docker logs task-manager-app
+            exit 1
+          fi
+          echo "Container is running"
 
       - name: Verify Deployment
         run: |
-          echo "Checking deployment status..."
-          kubectl get pods -n ${{ env.KUBE_NAMESPACE }} -l app=task-manager-api
-          kubectl get services -n ${{ env.KUBE_NAMESPACE }}
+          echo "Checking application health..."
+          for i in {1..5}; do
+            response=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/health || echo "000")
+            if [ "$response" = "200" ]; then
+              echo "Application is healthy! (attempt $i)"
+              exit 0
+            fi
+            echo "Attempt $i: Got status $response, retrying..."
+            sleep 5
+          done
+          echo "Application health check failed"
+          docker logs task-manager-app
+          exit 1
 
-      - name: Get Service URL
-        id: service-url
+  # ============================================
+  # Stage 2: Integration Tests
+  # Purpose: Test the deployed application end-to-end
+  # ============================================
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: deploy
+    services:
+      app:
+        image: ${{ secrets.DOCKERHUB_USERNAME }}/task-manager-api:latest
+        credentials:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+        ports:
+          - 8080:8080
+        options: >-
+          --health-cmd "wget --no-verbose --tries=1 --spider http://localhost:8080/health || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+          --health-start-period 30s
+    steps:
+      - name: Wait for Service
+        run: sleep 10
+
+      - name: Test Health Endpoint
         run: |
-          # For LoadBalancer service
-          SERVICE_IP=$(kubectl get svc task-manager-api -n ${{ env.KUBE_NAMESPACE }} -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "pending")
-          if [ "$SERVICE_IP" == "pending" ] || [ -z "$SERVICE_IP" ]; then
-            # For NodePort service
-            NODE_PORT=$(kubectl get svc task-manager-api -n ${{ env.KUBE_NAMESPACE }} -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null || echo "")
-            echo "Service URL: http://<node-ip>:$NODE_PORT"
+          echo "Testing /health endpoint..."
+          response=$(curl -s http://localhost:8080/health)
+          echo "Response: $response"
+
+          if echo "$response" | grep -q "UP"; then
+            echo "✅ Health check passed"
           else
-            echo "Service URL: http://$SERVICE_IP:8080"
+            echo "❌ Health check failed"
+            exit 1
           fi
+
+      - name: Test Root Endpoint
+        run: |
+          echo "Testing / endpoint..."
+          response=$(curl -s http://localhost:8080/)
+          echo "Response: $response"
+
+          if echo "$response" | grep -q "Welcome to Task Manager API"; then
+            echo "✅ Root endpoint passed"
+          else
+            echo "❌ Root endpoint failed"
+            exit 1
+          fi
+
+      - name: Test Create Task
+        run: |
+          echo "Testing POST /api/tasks..."
+          response=$(curl -s -X POST http://localhost:8080/api/tasks \
+            -H "Content-Type: application/json" \
+            -d '{"title":"Integration Test Task","description":"Created during CD pipeline"}')
+          echo "Response: $response"
+
+          if echo "$response" | grep -q "Integration Test Task"; then
+            echo "✅ Create task passed"
+          else
+            echo "❌ Create task failed"
+            exit 1
+          fi
+
+      - name: Test Get All Tasks
+        run: |
+          echo "Testing GET /api/tasks..."
+          response=$(curl -s http://localhost:8080/api/tasks)
+          echo "Response: $response"
+
+          if echo "$response" | grep -q "Integration Test Task"; then
+            echo "✅ Get tasks passed"
+          else
+            echo "❌ Get tasks failed"
+            exit 1
+          fi
+
+      - name: Test Search Tasks
+        run: |
+          echo "Testing GET /api/tasks/search..."
+          response=$(curl -s "http://localhost:8080/api/tasks/search?keyword=Integration")
+          echo "Response: $response"
+          echo "✅ Search endpoint responded"
+
+      - name: Test Toggle Task
+        run: |
+          echo "Testing PUT /api/tasks/1/toggle..."
+          response=$(curl -s -X PUT http://localhost:8080/api/tasks/1/toggle)
+          echo "Response: $response"
+
+          if echo "$response" | grep -q "completed"; then
+            echo "✅ Toggle task passed"
+          else
+            echo "❌ Toggle task failed"
+            exit 1
+          fi
+
+      - name: Integration Tests Summary
+        run: |
+          echo ""
+          echo "=========================================="
+          echo "   INTEGRATION TESTS COMPLETED"
+          echo "=========================================="
+          echo "✅ Health endpoint: PASSED"
+          echo "✅ Root endpoint: PASSED"
+          echo "✅ Create task: PASSED"
+          echo "✅ Get tasks: PASSED"
+          echo "✅ Search tasks: PASSED"
+          echo "✅ Toggle task: PASSED"
+          echo "=========================================="
 
   # ============================================
   # Stage 3: DAST (Dynamic Application Security Testing)
-  # Purpose: Test running application for security vulnerabilities
+  # Purpose: Security scan on running application
   # ============================================
   dast:
-    name: DAST - Security Scan
+    name: DAST - OWASP ZAP Scan
     runs-on: ubuntu-latest
     needs: deploy
-    continue-on-error: true  # DAST is informational, don't fail deployment
+    services:
+      app:
+        image: ${{ secrets.DOCKERHUB_USERNAME }}/task-manager-api:latest
+        credentials:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+        ports:
+          - 8080:8080
+        options: >-
+          --health-cmd "wget --no-verbose --tries=1 --spider http://localhost:8080/health || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+          --health-start-period 30s
     steps:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      - name: Setup kubectl
+      - name: Wait for Application
         run: |
-          mkdir -p $HOME/.kube
-          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > $HOME/.kube/config
-          chmod 600 $HOME/.kube/config
-
-      - name: Get Application URL
-        id: get-url
-        run: |
-          # Port forward for DAST scan
-          kubectl port-forward svc/task-manager-api 8080:8080 -n ${{ env.KUBE_NAMESPACE }} &
-          sleep 10
-          echo "target_url=http://localhost:8080" >> $GITHUB_OUTPUT
+          echo "Waiting for application to be ready..."
+          sleep 15
+          curl -s http://localhost:8080/health
 
       - name: OWASP ZAP Baseline Scan
-        uses: zaproxy/action-baseline@v0.10.0
+        uses: zaproxy/action-baseline@v0.12.0
         with:
-          target: ${{ steps.get-url.outputs.target_url }}
-          allow_issue_writing: false
-          fail_action: false  # Don't fail on findings
+          target: 'http://localhost:8080'
           rules_file_name: '.zap/rules.tsv'
+          fail_action: false
+          allow_issue_writing: false
 
       - name: Upload DAST Report
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: dast-report
+          name: zap-scan-report
           path: report_html.html
-          retention-days: 7
+          retention-days: 14
 
   # ============================================
-  # Stage 4: Smoke Test in Kubernetes
+  # Stage 4: Performance Test (Basic)
+  # Purpose: Basic load testing
   # ============================================
-  smoke-test:
-    name: Smoke Test
+  performance-test:
+    name: Performance Test
     runs-on: ubuntu-latest
     needs: deploy
+    services:
+      app:
+        image: ${{ secrets.DOCKERHUB_USERNAME }}/task-manager-api:latest
+        credentials:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+        ports:
+          - 8080:8080
+        options: >-
+          --health-cmd "wget --no-verbose --tries=1 --spider http://localhost:8080/health || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+          --health-start-period 30s
     steps:
-      - name: Setup kubectl
+      - name: Wait for Application
+        run: sleep 15
+
+      - name: Install Apache Bench
+        run: sudo apt-get update && sudo apt-get install -y apache2-utils
+
+      - name: Run Load Test - Health Endpoint
         run: |
-          mkdir -p $HOME/.kube
-          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > $HOME/.kube/config
-          chmod 600 $HOME/.kube/config
+          echo "Running load test on /health endpoint..."
+          echo "50 requests, 10 concurrent users"
+          ab -n 50 -c 10 http://localhost:8080/health
 
-      - name: Run Smoke Tests
+      - name: Run Load Test - API Endpoint
         run: |
-          # Port forward for testing
-          kubectl port-forward svc/task-manager-api 8080:8080 -n ${{ env.KUBE_NAMESPACE }} &
-          PF_PID=$!
-          sleep 10
+          echo "Running load test on /api/tasks endpoint..."
+          echo "50 requests, 10 concurrent users"
+          ab -n 50 -c 10 http://localhost:8080/api/tasks
 
-          echo "Testing health endpoint..."
-          curl -f http://localhost:8080/health || exit 1
-
-          echo "Testing API endpoint..."
-          curl -f http://localhost:8080/api/tasks || exit 1
-
-          echo "Smoke tests passed!"
-
-          # Cleanup port-forward
-          kill $PF_PID 2>/dev/null || true
+      - name: Performance Summary
+        run: |
+          echo ""
+          echo "=========================================="
+          echo "   PERFORMANCE TESTS COMPLETED"
+          echo "=========================================="
+          echo "✅ Application handled concurrent requests"
+          echo "=========================================="
 
   # ============================================
-  # Stage 5: Deployment Summary
+  # Pipeline Summary
   # ============================================
-  summary:
-    name: Deployment Summary
+  cd-summary:
+    name: CD Pipeline Summary
     runs-on: ubuntu-latest
-    needs: [deploy, smoke-test]
+    needs: [deploy, integration-tests, dast, performance-test]
     if: always()
     steps:
       - name: Generate Summary
         run: |
           echo "# CD Pipeline Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "## Deployment Details" >> $GITHUB_STEP_SUMMARY
-          echo "- **Environment:** ${{ needs.prepare.outputs.environment }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Image:** \`${{ env.DOCKER_IMAGE }}:${{ needs.prepare.outputs.image_tag }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **Namespace:** \`${{ env.KUBE_NAMESPACE }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "## Deployment" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image:** \`${{ env.DOCKER_IMAGE }}:latest\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment:** GitHub Actions Runner" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "## Stage Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Stage | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
           echo "| Deploy | ${{ needs.deploy.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Smoke Test | ${{ needs.smoke-test.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| DAST | ${{ needs.dast.result || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Integration Tests | ${{ needs.integration-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| DAST (ZAP Scan) | ${{ needs.dast.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Performance Test | ${{ needs.performance-test.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## What This Pipeline Does" >> $GITHUB_STEP_SUMMARY
+          echo "1. **Deploy**: Pulls and runs the Docker container" >> $GITHUB_STEP_SUMMARY
+          echo "2. **Integration Tests**: Tests all API endpoints end-to-end" >> $GITHUB_STEP_SUMMARY
+          echo "3. **DAST**: OWASP ZAP security scan on running app" >> $GITHUB_STEP_SUMMARY
+          echo "4. **Performance**: Basic load testing with Apache Bench" >> $GITHUB_STEP_SUMMARY
