@@ -1,79 +1,51 @@
-# Task Manager API - DevOps CI/CD Project
+# Task Manager API
 
-A production-grade **Task Manager REST API** built with **Spring Boot**, featuring a comprehensive **CI/CD pipeline** using **GitHub Actions** with integrated **security scanning**, **quality gates**, and **Kubernetes deployment**.
+[![CI Pipeline](https://github.com/KoolDrip/task-manager-api/actions/workflows/ci.yml/badge.svg)](https://github.com/KoolDrip/task-manager-api/actions/workflows/ci.yml)
+[![CD Pipeline](https://github.com/KoolDrip/task-manager-api/actions/workflows/cd.yml/badge.svg)](https://github.com/KoolDrip/task-manager-api/actions/workflows/cd.yml)
+[![Docker Hub](https://img.shields.io/badge/DockerHub-task--manager--api-blue)](https://hub.docker.com/r/kooldrip/task-manager-api)
+
+A production-grade **Task Manager REST API** built with **Spring Boot**, featuring a comprehensive **CI/CD pipeline** using **GitHub Actions** with integrated **security scanning**, **quality gates**, and **containerization**.
+
+---
 
 ## Table of Contents
 
-- [Project Overview](#project-overview)
-- [Architecture](#architecture)
-- [Tech Stack](#tech-stack)
-- [Getting Started](#getting-started)
-- [CI/CD Pipeline](#cicd-pipeline)
-- [API Documentation](#api-documentation)
-- [Security](#security)
-- [Kubernetes Deployment](#kubernetes-deployment)
-- [Configuration](#configuration)
+1. [Project Overview](#project-overview)
+2. [Application Features](#application-features)
+3. [Tech Stack](#tech-stack)
+4. [Getting Started](#getting-started)
+5. [CI/CD Pipeline Explanation](#cicd-pipeline-explanation)
+6. [Why Each Stage Exists](#why-each-stage-exists)
+7. [Security & DevSecOps](#security--devsecops)
+8. [Secrets Configuration](#secrets-configuration)
+9. [API Documentation](#api-documentation)
 
 ---
 
 ## Project Overview
 
-This project demonstrates a complete DevOps workflow implementing:
+This project demonstrates a complete **DevOps CI/CD workflow** implementing:
 
-- **Continuous Integration** with automated builds, testing, and security scanning
-- **Continuous Deployment** to Kubernetes with health checks and rollback support
-- **DevSecOps** practices with shift-left security integration
-- **Container security** scanning and runtime validation
+- **Continuous Integration** - Automated builds, testing, and security scanning on every push
+- **Continuous Deployment** - Automated deployment with integration testing and DAST
+- **DevSecOps** - Shift-left security with SAST, SCA, and container scanning
+- **Containerization** - Docker-based deployment ensuring consistency across environments
 
-### Application Features
+### Problem Statement
 
-- RESTful API for task management (CRUD operations)
-- Task filtering by status (completed/pending)
-- Search functionality
-- Health monitoring endpoints
-- H2 in-memory database for easy testing
+Manual deployment processes lead to human errors, inconsistent environments, and security vulnerabilities reaching production. This project solves these issues by implementing a fully automated pipeline that ensures only **tested, secure, and validated code** is deployed.
 
 ---
 
-## Architecture
+## Application Features
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         CI/CD Pipeline                               │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                      │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐            │
-│  │ Checkout │→ │ Linting  │→ │  SAST    │→ │   SCA    │            │
-│  │  Setup   │  │Checkstyle│  │  CodeQL  │  │Dep Check │            │
-│  └──────────┘  └──────────┘  └──────────┘  └──────────┘            │
-│       │                                                              │
-│       ▼                                                              │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐            │
-│  │  Unit    │→ │  Build   │→ │  Docker  │→ │  Image   │            │
-│  │  Tests   │  │  JAR     │  │  Build   │  │  Scan    │            │
-│  └──────────┘  └──────────┘  └──────────┘  └──────────┘            │
-│                                    │                                 │
-│                                    ▼                                 │
-│                           ┌──────────────┐                          │
-│                           │Runtime Test  │                          │
-│                           │(Smoke Test)  │                          │
-│                           └──────────────┘                          │
-│                                    │                                 │
-│                                    ▼                                 │
-│                           ┌──────────────┐                          │
-│                           │ Push to      │                          │
-│                           │ DockerHub    │                          │
-│                           └──────────────┘                          │
-│                                    │                                 │
-│                    ┌───────────────┴───────────────┐                │
-│                    ▼                               ▼                │
-│           ┌──────────────┐                ┌──────────────┐          │
-│           │ K8s Deploy   │                │    DAST      │          │
-│           │ (Staging)    │                │  (ZAP Scan)  │          │
-│           └──────────────┘                └──────────────┘          │
-│                                                                      │
-└─────────────────────────────────────────────────────────────────────┘
-```
+| Feature | Description |
+|---------|-------------|
+| CRUD Operations | Create, Read, Update, Delete tasks |
+| Task Filtering | Filter by completed/pending status |
+| Search | Search tasks by keyword |
+| Health Monitoring | `/health` endpoint for orchestration |
+| Input Validation | Bean validation for data integrity |
 
 ---
 
@@ -87,9 +59,7 @@ This project demonstrates a complete DevOps workflow implementing:
 | Database | H2 (In-memory) |
 | Container | Docker |
 | CI/CD | GitHub Actions |
-| Orchestration | Kubernetes |
-| Security Scanning | CodeQL, OWASP Dependency Check, Trivy |
-| Code Quality | Checkstyle, JaCoCo |
+| Security | CodeQL, OWASP Dependency Check, Trivy, ZAP |
 
 ---
 
@@ -97,82 +67,246 @@ This project demonstrates a complete DevOps workflow implementing:
 
 ### Prerequisites
 
-- Java 17 or higher
+- Java 17+
 - Maven 3.8+
-- Docker
-- kubectl (for Kubernetes deployment)
+- Docker (optional)
 
-### Local Development
+### Run Locally
 
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/yourusername/task-manager-api.git
-   cd task-manager-api
-   ```
+```bash
+# Clone the repository
+git clone https://github.com/KoolDrip/task-manager-api.git
+cd task-manager-api
 
-2. **Build the application**
-   ```bash
-   mvn clean package
-   ```
+# Build the application
+mvn clean package
 
-3. **Run locally**
-   ```bash
-   java -jar target/task-manager-api-1.0.0.jar
-   ```
+# Run the application
+java -jar target/task-manager-api-1.0.0.jar
 
-4. **Access the API**
-   - Application: http://localhost:8080
-   - Health Check: http://localhost:8080/health
-   - H2 Console: http://localhost:8080/h2-console
+# Access the API
+curl http://localhost:8080/health
+```
 
-### Running with Docker
+### Run with Docker
 
-1. **Build the Docker image**
-   ```bash
-   docker build -t task-manager-api:latest .
-   ```
+```bash
+# Build Docker image
+docker build -t task-manager-api:latest .
 
-2. **Run the container**
-   ```bash
-   docker run -p 8080:8080 task-manager-api:latest
-   ```
+# Run container
+docker run -p 8080:8080 task-manager-api:latest
+
+# Test
+curl http://localhost:8080/health
+```
 
 ---
 
-## CI/CD Pipeline
+## CI/CD Pipeline Explanation
+
+### Pipeline Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         CI PIPELINE (ci.yml)                            │
+│                     Triggered on: push to master                        │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  ┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐             │
+│  │Checkout │ → │ Linting │ → │  SAST   │ → │   SCA   │             │
+│  │ & Setup │    │Checkstyle│   │ CodeQL  │    │OWASP DC │             │
+│  └─────────┘    └─────────┘    └─────────┘    └─────────┘             │
+│       │                                             │                   │
+│       ▼                                             ▼                   │
+│  ┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐             │
+│  │  Unit   │ → │  Build  │ → │ Docker  │ → │  Image  │             │
+│  │  Tests  │    │   JAR   │    │  Build  │    │  Scan   │             │
+│  └─────────┘    └─────────┘    └─────────┘    └─────────┘             │
+│                                                     │                   │
+│                                                     ▼                   │
+│                              ┌─────────┐    ┌─────────┐                │
+│                              │ Runtime │ → │  Push   │                │
+│                              │  Test   │    │DockerHub│                │
+│                              └─────────┘    └─────────┘                │
+├─────────────────────────────────────────────────────────────────────────┤
+│                         CD PIPELINE (cd.yml)                            │
+│                    Triggered after: CI success                          │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  ┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐             │
+│  │ Deploy  │ → │  Integ  │ → │  DAST   │ → │  Perf   │             │
+│  │Container│    │  Tests  │    │OWASP ZAP│    │  Tests  │             │
+│  └─────────┘    └─────────┘    └─────────┘    └─────────┘             │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
 
 ### CI Pipeline Stages
 
-| Stage | Tool | Purpose | Why It Matters |
-|-------|------|---------|----------------|
-| **Checkout** | GitHub Actions | Retrieve source code | Foundation for all subsequent stages |
-| **Setup** | actions/setup-java | Install Java runtime | Consistent build environment |
-| **Linting** | Checkstyle | Enforce coding standards | Prevents technical debt |
-| **SAST** | CodeQL | Static security analysis | Detects OWASP Top 10 vulnerabilities |
-| **SCA** | OWASP Dependency Check | Dependency scanning | Identifies supply-chain risks |
-| **Unit Tests** | JUnit 5 + JaCoCo | Test execution & coverage | Prevents regressions |
-| **Build** | Maven | Package application | Creates deployable artifact |
-| **Docker Build** | Docker | Container image creation | Enables consistent deployment |
-| **Image Scan** | Trivy | Container vulnerability scan | Prevents vulnerable images |
-| **Runtime Test** | curl | Container smoke test | Validates image is runnable |
-| **Push** | Docker | Publish to DockerHub | Enables downstream CD |
+| Stage | Tool | Duration |
+|-------|------|----------|
+| 1. Checkout & Setup | actions/checkout, setup-java | ~30s |
+| 2. Linting | Maven Checkstyle | ~45s |
+| 3. SAST | GitHub CodeQL | ~2-3min |
+| 4. SCA | OWASP Dependency Check | ~1-2min |
+| 5. Unit Tests | JUnit 5 + JaCoCo | ~1min |
+| 6. Build | Maven package | ~1min |
+| 7. Docker Build | docker/build-push-action | ~2min |
+| 8. Image Scan | Aqua Trivy | ~1min |
+| 9. Runtime Test | curl smoke tests | ~1min |
+| 10. Registry Push | DockerHub | ~30s |
 
 ### CD Pipeline Stages
 
-| Stage | Purpose |
-|-------|---------|
-| **Deploy** | Deploy to Kubernetes cluster |
-| **DAST** | Dynamic security testing with OWASP ZAP |
-| **Smoke Test** | Validate deployment health |
+| Stage | Tool | Purpose |
+|-------|------|---------|
+| 1. Deploy | Docker | Run container from DockerHub |
+| 2. Integration Tests | curl | End-to-end API testing |
+| 3. DAST | OWASP ZAP | Dynamic security scanning |
+| 4. Performance Tests | Apache Bench | Load testing |
 
-### Triggering the Pipeline
+---
 
-**Automatic Triggers:**
-- Push to `master` or `main` branch
-- Pull requests to `master` or `main`
+## Why Each Stage Exists
 
-**Manual Trigger:**
-- Use "Run workflow" in GitHub Actions tab
+Understanding **why** each stage exists is critical for DevOps reasoning:
+
+### 1. Checkout & Setup
+**Why:** Retrieves source code and establishes a consistent build environment (Java 17). Without this, builds would be inconsistent across different runners.
+
+### 2. Linting (Checkstyle)
+**Why:** Enforces coding standards automatically.
+**Risk Mitigated:** Technical debt, inconsistent code style, maintainability issues.
+**Shift-Left Benefit:** Catches style issues before code review, saving reviewer time.
+
+### 3. SAST - Static Application Security Testing (CodeQL)
+**Why:** Analyzes source code for security vulnerabilities without executing it.
+**Risk Mitigated:** OWASP Top 10 vulnerabilities:
+- SQL Injection
+- Cross-Site Scripting (XSS)
+- Insecure Deserialization
+- Security Misconfigurations
+
+**Shift-Left Benefit:** Finds vulnerabilities at code-write time, not in production.
+
+### 4. SCA - Software Composition Analysis (OWASP Dependency Check)
+**Why:** Scans third-party dependencies for known vulnerabilities (CVEs).
+**Risk Mitigated:** Supply chain attacks, vulnerable libraries.
+**Example:** Log4Shell (CVE-2021-44228) would be detected here.
+
+### 5. Unit Tests
+**Why:** Validates business logic works correctly.
+**Risk Mitigated:** Regressions, broken functionality.
+**Fail-Fast:** If tests fail, pipeline stops immediately - no point building a broken app.
+
+### 6. Build
+**Why:** Compiles code and packages into deployable JAR artifact.
+**Risk Mitigated:** Compilation errors, missing dependencies.
+
+### 7. Docker Build
+**Why:** Creates immutable container image ensuring consistency.
+**Risk Mitigated:** "Works on my machine" problem.
+**Best Practice:** Multi-stage build reduces image size and attack surface.
+
+### 8. Image Scan (Trivy)
+**Why:** Scans container for OS and library vulnerabilities.
+**Risk Mitigated:** Vulnerable base images, outdated packages in container.
+**Difference from SCA:** SCA scans app dependencies; Trivy scans entire container (OS + runtime).
+
+### 9. Runtime Test (Smoke Test)
+**Why:** Validates the container actually starts and responds.
+**Risk Mitigated:** Container crashes, misconfigured entrypoints.
+**Critical:** A container can build successfully but fail to run.
+
+### 10. Registry Push
+**Why:** Publishes trusted, validated image to DockerHub.
+**Risk Mitigated:** Only images that pass ALL checks reach the registry.
+**Enables:** Downstream CD pipeline can pull trusted image.
+
+### 11. DAST - Dynamic Application Security Testing (OWASP ZAP)
+**Why:** Tests the running application for security vulnerabilities.
+**Risk Mitigated:** Runtime security issues not detectable by static analysis:
+- Missing security headers
+- Information disclosure
+- Authentication/Authorization issues
+
+---
+
+## Security & DevSecOps
+
+### Shift-Left Security Model
+
+```
+Traditional:  Code → Build → Test → Deploy → Security Scan (Too Late!)
+                                                    ↑
+                                              Vulnerabilities found
+                                              in production = costly
+
+Shift-Left:   Code → Security Scan → Build → Test → Deploy (Early Detection!)
+                          ↑
+                    Vulnerabilities found
+                    at development = cheap to fix
+```
+
+### Security Tools Integrated
+
+| Tool | Type | What It Detects | Stage |
+|------|------|-----------------|-------|
+| Checkstyle | Quality | Code style violations | CI |
+| CodeQL | SAST | Code vulnerabilities | CI |
+| OWASP Dependency Check | SCA | Vulnerable dependencies | CI |
+| Trivy | Container Scan | OS/library vulnerabilities | CI |
+| OWASP ZAP | DAST | Runtime vulnerabilities | CD |
+
+### Security Findings Location
+
+All security findings are surfaced in the **GitHub Security tab**:
+- CodeQL results → Security → Code scanning alerts
+- Trivy results → Security → Code scanning alerts (via SARIF)
+
+---
+
+## Secrets Configuration
+
+### Required GitHub Secrets
+
+| Secret Name | Purpose | How to Get |
+|-------------|---------|------------|
+| `DOCKERHUB_USERNAME` | DockerHub login | Your DockerHub username |
+| `DOCKERHUB_TOKEN` | DockerHub authentication | DockerHub → Account Settings → Security → Access Tokens |
+
+### How to Configure
+
+1. Go to your GitHub repository
+2. Navigate to **Settings** → **Secrets and variables** → **Actions**
+3. Click **New repository secret**
+4. Add each secret:
+
+```
+Name: DOCKERHUB_USERNAME
+Value: your-dockerhub-username
+
+Name: DOCKERHUB_TOKEN
+Value: dckr_pat_xxxxxxxxxxxx
+```
+
+### Getting DockerHub Token
+
+1. Log in to [DockerHub](https://hub.docker.com)
+2. Click your profile → **Account Settings**
+3. Go to **Security** → **Access Tokens**
+4. Click **New Access Token**
+5. Name: `github-actions`
+6. Permissions: **Read & Write**
+7. Copy the token (shown only once!)
+
+### Security Best Practices
+
+- **NEVER** hardcode secrets in code or YAML files
+- **NEVER** commit `.env` files with secrets
+- **ALWAYS** use GitHub Secrets for sensitive values
+- **ROTATE** tokens periodically
 
 ---
 
@@ -183,7 +317,7 @@ This project demonstrates a complete DevOps workflow implementing:
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/` | Welcome message |
-| GET | `/health` | Health check |
+| GET | `/health` | Health check (for container orchestration) |
 | GET | `/api/tasks` | Get all tasks |
 | GET | `/api/tasks/{id}` | Get task by ID |
 | POST | `/api/tasks` | Create new task |
@@ -196,114 +330,25 @@ This project demonstrates a complete DevOps workflow implementing:
 
 ### Example Requests
 
-**Create a Task:**
 ```bash
+# Health check
+curl http://localhost:8080/health
+
+# Create a task
 curl -X POST http://localhost:8080/api/tasks \
   -H "Content-Type: application/json" \
   -d '{"title": "Learn DevOps", "description": "Complete CI/CD project"}'
-```
 
-**Get All Tasks:**
-```bash
+# Get all tasks
 curl http://localhost:8080/api/tasks
-```
 
-**Update a Task:**
-```bash
+# Update a task
 curl -X PUT http://localhost:8080/api/tasks/1 \
   -H "Content-Type: application/json" \
   -d '{"title": "Learn DevOps", "description": "Project completed!", "completed": true}'
-```
 
----
-
-## Security
-
-### Security Measures Implemented
-
-1. **Static Application Security Testing (SAST)**
-   - CodeQL analysis for code vulnerabilities
-   - Results visible in GitHub Security tab
-
-2. **Software Composition Analysis (SCA)**
-   - OWASP Dependency Check for vulnerable dependencies
-   - Fail build on CVSS score >= 7
-
-3. **Container Security**
-   - Trivy scanning for OS and library vulnerabilities
-   - Non-root user in Docker container
-   - Multi-stage build for minimal attack surface
-
-4. **Dynamic Application Security Testing (DAST)**
-   - OWASP ZAP baseline scan in CD pipeline
-
-### Security Best Practices
-
-- Secrets managed via GitHub Secrets (never hardcoded)
-- Container runs as non-root user
-- Health checks for container orchestration
-- Input validation with Bean Validation
-
----
-
-## Kubernetes Deployment
-
-### Prerequisites
-
-1. A running Kubernetes cluster
-2. kubectl configured with cluster access
-3. DockerHub credentials
-
-### Deployment Files
-
-```
-k8s/
-├── deployment.yaml    # Application deployment
-├── service.yaml       # LoadBalancer service
-├── configmap.yaml     # Configuration
-└── hpa.yaml          # Horizontal Pod Autoscaler
-```
-
-### Manual Deployment
-
-```bash
-# Create namespace
-kubectl create namespace task-manager
-
-# Apply manifests
-kubectl apply -f k8s/ -n task-manager
-
-# Check deployment status
-kubectl get pods -n task-manager
-kubectl get services -n task-manager
-```
-
----
-
-## Configuration
-
-### GitHub Secrets Required
-
-| Secret | Description |
-|--------|-------------|
-| `DOCKERHUB_USERNAME` | DockerHub username |
-| `DOCKERHUB_TOKEN` | DockerHub access token |
-| `KUBE_CONFIG` | Base64 encoded kubeconfig (for CD) |
-
-### Setting Up Secrets
-
-1. Go to repository **Settings** > **Secrets and variables** > **Actions**
-2. Click **New repository secret**
-3. Add each secret with appropriate values
-
-**Generate DockerHub Token:**
-1. Log in to DockerHub
-2. Go to Account Settings > Security > Access Tokens
-3. Create a new access token with read/write permissions
-
-**Generate KUBE_CONFIG:**
-```bash
-cat ~/.kube/config | base64
+# Delete a task
+curl -X DELETE http://localhost:8080/api/tasks/1
 ```
 
 ---
@@ -311,29 +356,26 @@ cat ~/.kube/config | base64
 ## Project Structure
 
 ```
-project-root/
+task-manager-api/
 ├── .github/
 │   └── workflows/
-│       ├── ci.yml              # CI pipeline
-│       └── cd.yml              # CD pipeline
-├── k8s/
-│   ├── deployment.yaml
-│   ├── service.yaml
-│   ├── configmap.yaml
-│   └── hpa.yaml
+│       ├── ci.yml              # CI Pipeline (11 stages)
+│       └── cd.yml              # CD Pipeline (4 stages)
 ├── src/
 │   ├── main/
 │   │   ├── java/com/taskmanager/
-│   │   │   ├── controller/
-│   │   │   ├── model/
-│   │   │   ├── repository/
-│   │   │   └── service/
+│   │   │   ├── controller/     # REST Controllers
+│   │   │   ├── model/          # Entity Classes
+│   │   │   ├── repository/     # Data Access
+│   │   │   └── service/        # Business Logic
 │   │   └── resources/
-│   └── test/
-├── Dockerfile
-├── pom.xml
-├── checkstyle.xml
-└── README.md
+│   │       └── application.properties
+│   └── test/                   # Unit Tests
+├── k8s/                        # Kubernetes Manifests (optional)
+├── Dockerfile                  # Multi-stage Docker build
+├── pom.xml                     # Maven config + plugins
+├── checkstyle.xml             # Code quality rules
+└── README.md                  # This file
 ```
 
 ---
@@ -349,45 +391,39 @@ mvn test jacoco:report
 
 # View coverage report
 open target/site/jacoco/index.html
+
+# Run checkstyle
+mvn checkstyle:check
 ```
-
----
-
-## Quality Gates
-
-- **Checkstyle**: Enforces Google Java Style Guide
-- **JaCoCo**: Code coverage reporting
-- **Dependency Check**: Fails on CVSS >= 7
-- **Trivy**: Reports HIGH and CRITICAL vulnerabilities
 
 ---
 
 ## Troubleshooting
 
-### Common Issues
+### Pipeline Fails on Linting
+```bash
+# Check violations locally
+mvn checkstyle:check
+# Fix formatting issues before pushing
+```
 
-**Build fails on Checkstyle:**
-- Run `mvn checkstyle:check` locally to see violations
-- Fix formatting issues before pushing
+### Pipeline Fails on Unit Tests
+```bash
+# Run tests locally to see failures
+mvn test
+```
 
-**Docker build fails:**
-- Ensure JAR is built first: `mvn clean package -DskipTests`
-- Check Dockerfile syntax
+### Docker Build Fails
+```bash
+# Ensure JAR is built first
+mvn clean package -DskipTests
+docker build -t task-manager-api .
+```
 
-**Kubernetes deployment fails:**
-- Verify image is pushed to DockerHub
-- Check secrets are configured correctly
-- Review pod logs: `kubectl logs -l app=task-manager-api -n task-manager`
-
----
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Ensure all tests pass
-5. Submit a pull request
+### DockerHub Push Fails
+- Verify `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` secrets are set
+- Ensure token has Read & Write permissions
+- Check if repository exists on DockerHub
 
 ---
 
@@ -399,15 +435,6 @@ This project is created for educational purposes as part of the DevOps CI/CD ass
 
 ## Author
 
-**Student Name**
-3rd Year Computer Science
-Scaler Academy
-
----
-
-## Acknowledgments
-
-- Scaler Academy DevOps Program
-- Spring Boot Documentation
-- GitHub Actions Documentation
-- OWASP Security Guidelines
+**Jenish**
+DevOps Engineering Student
+GitHub: [@KoolDrip](https://github.com/KoolDrip)

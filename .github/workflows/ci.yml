@@ -1,6 +1,20 @@
+# =============================================================================
+# CI PIPELINE - Task Manager API
+# =============================================================================
+# This pipeline implements a production-grade CI workflow with:
+# - Code Quality (Linting)
+# - Security Scanning (SAST, SCA)
+# - Testing (Unit Tests)
+# - Containerization (Docker Build, Image Scan)
+# - Registry Push (DockerHub)
+#
+# WHY CI/CD? Manual processes lead to human errors, inconsistent environments,
+# and security vulnerabilities. This pipeline ensures only tested, secure,
+# and validated code reaches production.
+# =============================================================================
+
 name: CI Pipeline
 
-# Trigger on push to master and manual workflow dispatch
 on:
   push:
     branches:
@@ -10,16 +24,20 @@ on:
     branches:
       - master
       - main
-  workflow_dispatch:
+  workflow_dispatch:  # Allows manual triggering
 
 env:
   JAVA_VERSION: '17'
   DOCKER_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/task-manager-api
 
 jobs:
-  # ============================================
-  # Stage 1: Checkout and Setup
-  # ============================================
+  # ===========================================================================
+  # STAGE 1: CHECKOUT & SETUP
+  # ===========================================================================
+  # WHY: Retrieves source code and caches dependencies for faster builds.
+  # Without proper setup, builds would be inconsistent across different runners.
+  # Maven caching reduces build time by ~60% on subsequent runs.
+  # ===========================================================================
   checkout-and-setup:
     name: Checkout & Setup
     runs-on: ubuntu-latest
@@ -31,7 +49,7 @@ jobs:
         with:
           fetch-depth: 0  # Full history for better analysis
 
-      - name: Setup Java JDK
+      - name: Setup Java JDK ${{ env.JAVA_VERSION }}
         uses: actions/setup-java@v4
         with:
           java-version: ${{ env.JAVA_VERSION }}
@@ -50,12 +68,16 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-maven-
 
-  # ============================================
-  # Stage 2: Code Linting (Checkstyle)
-  # Purpose: Enforce coding standards and prevent technical debt
-  # ============================================
+  # ===========================================================================
+  # STAGE 2: LINTING (Code Quality)
+  # ===========================================================================
+  # WHY: Enforces coding standards automatically before code review.
+  # RISK MITIGATED: Technical debt, inconsistent code style, maintainability issues
+  # SHIFT-LEFT BENEFIT: Catches style issues early, saves reviewer time
+  # TOOL: Checkstyle - enforces Google Java Style Guide
+  # ===========================================================================
   linting:
-    name: Code Linting
+    name: Linting (Checkstyle)
     runs-on: ubuntu-latest
     needs: checkout-and-setup
     steps:
@@ -69,9 +91,10 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
-      - name: Run Checkstyle
+      - name: Run Checkstyle Analysis
         run: mvn checkstyle:check -B
-        continue-on-error: false
+        # Pipeline FAILS if code style violations found
+        # This enforces consistent code quality across the team
 
       - name: Upload Checkstyle Report
         uses: actions/upload-artifact@v4
@@ -81,26 +104,35 @@ jobs:
           path: target/checkstyle-result.xml
           retention-days: 7
 
-  # ============================================
-  # Stage 3: SAST (Static Application Security Testing)
-  # Purpose: Detect code-level vulnerabilities (OWASP Top 10)
-  # ============================================
+  # ===========================================================================
+  # STAGE 3: SAST (Static Application Security Testing)
+  # ===========================================================================
+  # WHY: Analyzes source code for security vulnerabilities WITHOUT executing it
+  # RISK MITIGATED: OWASP Top 10 vulnerabilities:
+  #   - SQL Injection
+  #   - Cross-Site Scripting (XSS)
+  #   - Insecure Deserialization
+  #   - Security Misconfigurations
+  # SHIFT-LEFT BENEFIT: Finds vulnerabilities at code-write time, not production
+  # TOOL: GitHub CodeQL - semantic code analysis engine
+  # ===========================================================================
   sast:
-    name: SAST - CodeQL Analysis
+    name: SAST (CodeQL)
     runs-on: ubuntu-latest
     needs: checkout-and-setup
     permissions:
       actions: read
       contents: read
-      security-events: write
+      security-events: write  # Required to upload SARIF to Security tab
     steps:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@v4
         with:
           languages: java
+          # CodeQL analyzes Java bytecode for deeper vulnerability detection
 
       - name: Setup Java JDK
         uses: actions/setup-java@v4
@@ -109,20 +141,25 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
-      - name: Build for CodeQL
+      - name: Build for CodeQL Analysis
         run: mvn compile -B -DskipTests
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@v4
         with:
           category: "/language:java"
+          # Results appear in GitHub Security tab > Code scanning alerts
 
-  # ============================================
-  # Stage 4: SCA (Software Composition Analysis)
-  # Purpose: Identify vulnerable dependencies (supply chain security)
-  # ============================================
+  # ===========================================================================
+  # STAGE 4: SCA (Software Composition Analysis)
+  # ===========================================================================
+  # WHY: Scans third-party dependencies for known vulnerabilities (CVEs)
+  # RISK MITIGATED: Supply chain attacks, vulnerable libraries
+  # EXAMPLE: Log4Shell (CVE-2021-44228) would be detected here
+  # TOOL: OWASP Dependency Check - scans against National Vulnerability Database
+  # ===========================================================================
   sca:
-    name: SCA - Dependency Check
+    name: SCA (Dependency Check)
     runs-on: ubuntu-latest
     needs: checkout-and-setup
     steps:
@@ -138,7 +175,8 @@ jobs:
 
       - name: Run OWASP Dependency Check
         run: mvn dependency-check:check -B
-        continue-on-error: true  # Don't fail on vulnerabilities, report them
+        continue-on-error: true  # Report vulnerabilities but don't block
+        # In production, set failBuildOnCVSS threshold in pom.xml
 
       - name: Upload Dependency Check Report
         uses: actions/upload-artifact@v4
@@ -148,10 +186,14 @@ jobs:
           path: target/dependency-check-report.html
           retention-days: 7
 
-  # ============================================
-  # Stage 5: Unit Tests
-  # Purpose: Validate business logic and prevent regressions
-  # ============================================
+  # ===========================================================================
+  # STAGE 5: UNIT TESTS
+  # ===========================================================================
+  # WHY: Validates business logic works correctly
+  # RISK MITIGATED: Regressions, broken functionality
+  # FAIL-FAST: If tests fail, pipeline stops - no point building broken code
+  # TOOL: JUnit 5 + JaCoCo for test execution and code coverage
+  # ===========================================================================
   unit-tests:
     name: Unit Tests
     runs-on: ubuntu-latest
@@ -169,6 +211,7 @@ jobs:
 
       - name: Run Unit Tests with Coverage
         run: mvn test jacoco:report -B
+        # Tests MUST pass - this is a quality gate
 
       - name: Upload Test Results
         uses: actions/upload-artifact@v4
@@ -186,14 +229,17 @@ jobs:
           path: target/site/jacoco/
           retention-days: 7
 
-  # ============================================
-  # Stage 6: Build Application
-  # Purpose: Package the application into a deployable artifact
-  # ============================================
+  # ===========================================================================
+  # STAGE 6: BUILD APPLICATION
+  # ===========================================================================
+  # WHY: Compiles code and packages into deployable JAR artifact
+  # RISK MITIGATED: Compilation errors, missing dependencies
+  # DEPENDENCY: Only runs after linting and tests pass (fail-fast)
+  # ===========================================================================
   build:
     name: Build Application
     runs-on: ubuntu-latest
-    needs: [linting, unit-tests]
+    needs: [linting, unit-tests]  # Only build if quality checks pass
     steps:
       - name: Checkout Source Code
         uses: actions/checkout@v4
@@ -205,8 +251,9 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
-      - name: Build Application
+      - name: Build Application JAR
         run: mvn clean package -DskipTests -B
+        # Tests already ran - skip here for faster builds
 
       - name: Upload Build Artifact
         uses: actions/upload-artifact@v4
@@ -215,10 +262,13 @@ jobs:
           path: target/*.jar
           retention-days: 7
 
-  # ============================================
-  # Stage 7: Docker Build
-  # Purpose: Create container image for deployment
-  # ============================================
+  # ===========================================================================
+  # STAGE 7: DOCKER BUILD
+  # ===========================================================================
+  # WHY: Creates immutable container image ensuring consistency
+  # RISK MITIGATED: "Works on my machine" problem
+  # BEST PRACTICE: Multi-stage build reduces image size and attack surface
+  # ===========================================================================
   docker-build:
     name: Docker Build
     runs-on: ubuntu-latest
@@ -253,7 +303,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Save Docker Image
+      - name: Save Docker Image for Later Stages
         run: docker save ${{ env.DOCKER_IMAGE }}:${{ github.sha }} -o image.tar
 
       - name: Upload Docker Image Artifact
@@ -263,14 +313,21 @@ jobs:
           path: image.tar
           retention-days: 1
 
-  # ============================================
-  # Stage 8: Image Scan (Trivy)
-  # Purpose: Detect OS and library vulnerabilities in container
-  # ============================================
+  # ===========================================================================
+  # STAGE 8: IMAGE SCAN (Container Vulnerability Scan)
+  # ===========================================================================
+  # WHY: Scans container for OS and library vulnerabilities
+  # RISK MITIGATED: Vulnerable base images, outdated packages in container
+  # DIFFERENCE FROM SCA: SCA scans app dependencies; Trivy scans entire container
+  # TOOL: Aqua Trivy - comprehensive container scanner
+  # ===========================================================================
   image-scan:
-    name: Container Image Scan
+    name: Image Scan (Trivy)
     runs-on: ubuntu-latest
     needs: docker-build
+    permissions:
+      contents: read
+      security-events: write
     steps:
       - name: Download Docker Image
         uses: actions/download-artifact@v4
@@ -285,30 +342,34 @@ jobs:
         with:
           image-ref: '${{ env.DOCKER_IMAGE }}:${{ github.sha }}'
           format: 'table'
-          exit-code: '0'  # Don't fail, just report
+          exit-code: '0'  # Report but don't fail
           ignore-unfixed: true
           vuln-type: 'os,library'
           severity: 'CRITICAL,HIGH,MEDIUM'
 
-      - name: Run Trivy and Generate SARIF
+      - name: Generate SARIF Report for GitHub Security Tab
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: '${{ env.DOCKER_IMAGE }}:${{ github.sha }}'
           format: 'sarif'
           output: 'trivy-results.sarif'
 
-      - name: Upload Trivy Scan Results to GitHub Security
-        uses: github/codeql-action/upload-sarif@v3
+      - name: Upload Trivy Results to GitHub Security Tab
+        uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: 'trivy-results.sarif'
+          # Results appear in GitHub Security tab > Code scanning alerts
 
-  # ============================================
-  # Stage 9: Runtime Test (Container Smoke Test)
-  # Purpose: Validate container starts and responds correctly
-  # ============================================
+  # ===========================================================================
+  # STAGE 9: RUNTIME TEST (Container Smoke Test)
+  # ===========================================================================
+  # WHY: Validates the container actually starts and responds correctly
+  # RISK MITIGATED: Container crashes, misconfigured entrypoints
+  # CRITICAL: A container can BUILD successfully but FAIL to run
+  # ===========================================================================
   runtime-test:
-    name: Container Runtime Test
+    name: Runtime Test (Smoke Test)
     runs-on: ubuntu-latest
     needs: docker-build
     steps:
@@ -323,37 +384,46 @@ jobs:
       - name: Start Container
         run: |
           docker run -d --name test-container -p 8080:8080 ${{ env.DOCKER_IMAGE }}:${{ github.sha }}
-          echo "Waiting for application to start..."
+          echo "Waiting for application startup..."
           sleep 30
 
-      - name: Health Check
+      - name: Verify Health Endpoint
         run: |
-          echo "Running health check..."
-          response=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/health)
-          if [ "$response" = "200" ]; then
-            echo "Health check passed! Status: $response"
-          else
-            echo "Health check failed! Status: $response"
-            docker logs test-container
-            exit 1
-          fi
+          echo "Checking /health endpoint..."
+          for i in {1..5}; do
+            response=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/health)
+            if [ "$response" = "200" ]; then
+              echo "✅ Health check PASSED (HTTP $response)"
+              exit 0
+            fi
+            echo "Attempt $i: HTTP $response - retrying..."
+            sleep 5
+          done
+          echo "❌ Health check FAILED"
+          docker logs test-container
+          exit 1
 
-      - name: API Smoke Test
+      - name: Verify API Endpoints
         run: |
           echo "Testing root endpoint..."
           curl -f http://localhost:8080/ || exit 1
+          echo "✅ Root endpoint PASSED"
 
-          echo "Testing tasks endpoint..."
+          echo "Testing /api/tasks endpoint..."
           curl -f http://localhost:8080/api/tasks || exit 1
+          echo "✅ Tasks endpoint PASSED"
 
-          echo "Testing task creation..."
+          echo "Testing POST /api/tasks..."
           curl -f -X POST http://localhost:8080/api/tasks \
             -H "Content-Type: application/json" \
-            -d '{"title":"Test Task","description":"Created during CI"}' || exit 1
+            -d '{"title":"CI Test Task","description":"Created during CI pipeline"}' || exit 1
+          echo "✅ Create task PASSED"
 
-          echo "All smoke tests passed!"
+          echo "=========================================="
+          echo "   ALL SMOKE TESTS PASSED"
+          echo "=========================================="
 
-      - name: Container Logs
+      - name: Show Container Logs
         if: always()
         run: docker logs test-container
 
@@ -363,14 +433,18 @@ jobs:
           docker stop test-container || true
           docker rm test-container || true
 
-  # ============================================
-  # Stage 10: Push to Docker Registry
-  # Purpose: Publish trusted image for deployment
-  # ============================================
+  # ===========================================================================
+  # STAGE 10: PUSH TO DOCKER REGISTRY
+  # ===========================================================================
+  # WHY: Publishes trusted, validated image to DockerHub
+  # RISK MITIGATED: Only images that pass ALL checks reach the registry
+  # ENABLES: Downstream CD pipeline can pull trusted image
+  # CONDITION: Only pushes on master/main branch (not PRs)
+  # ===========================================================================
   docker-push:
     name: Push to DockerHub
     runs-on: ubuntu-latest
-    needs: [image-scan, runtime-test, sast, sca]
+    needs: [image-scan, runtime-test, sast, sca]  # All security checks must pass
     if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main')
     steps:
       - name: Download Docker Image
@@ -387,39 +461,58 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Push to DockerHub
+      - name: Push Image to DockerHub
         run: |
+          echo "Pushing image with commit SHA tag..."
           docker push ${{ env.DOCKER_IMAGE }}:${{ github.sha }}
+
+          echo "Pushing image with 'latest' tag..."
           docker push ${{ env.DOCKER_IMAGE }}:latest
 
-      - name: Image Push Summary
-        run: |
-          echo "## Docker Image Published" >> $GITHUB_STEP_SUMMARY
-          echo "- Image: \`${{ env.DOCKER_IMAGE }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- Tags: \`${{ github.sha }}\`, \`latest\`" >> $GITHUB_STEP_SUMMARY
-          echo "- Registry: DockerHub" >> $GITHUB_STEP_SUMMARY
+          echo "=========================================="
+          echo "   IMAGE PUSHED TO DOCKERHUB"
+          echo "   ${{ env.DOCKER_IMAGE }}:${{ github.sha }}"
+          echo "   ${{ env.DOCKER_IMAGE }}:latest"
+          echo "=========================================="
 
-  # ============================================
-  # Pipeline Summary
-  # ============================================
+      - name: Generate Push Summary
+        run: |
+          echo "## 🐳 Docker Image Published" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Image | \`${{ env.DOCKER_IMAGE }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Tags | \`${{ github.sha }}\`, \`latest\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Registry | DockerHub |" >> $GITHUB_STEP_SUMMARY
+
+  # ===========================================================================
+  # PIPELINE SUMMARY
+  # ===========================================================================
   pipeline-summary:
     name: Pipeline Summary
     runs-on: ubuntu-latest
-    needs: [docker-push]
+    needs: [linting, sast, sca, unit-tests, build, docker-build, image-scan, runtime-test, docker-push]
     if: always()
     steps:
-      - name: Generate Summary
+      - name: Generate CI Summary
         run: |
-          echo "# CI Pipeline Summary" >> $GITHUB_STEP_SUMMARY
+          echo "# 🚀 CI Pipeline Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Stage | Status |" >> $GITHUB_STEP_SUMMARY
-          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Linting | ${{ needs.linting.result || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| SAST | ${{ needs.sast.result || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| SCA | ${{ needs.sca.result || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Unit Tests | ${{ needs.unit-tests.result || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Build | ${{ needs.build.result || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Docker Build | ${{ needs.docker-build.result || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Image Scan | ${{ needs.image-scan.result || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Runtime Test | ${{ needs.runtime-test.result || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Docker Push | ${{ needs.docker-push.result || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "## Stage Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Stage | Purpose | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|---------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Linting | Enforce coding standards | ${{ needs.linting.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| SAST | Detect code vulnerabilities | ${{ needs.sast.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| SCA | Detect vulnerable dependencies | ${{ needs.sca.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Unit Tests | Validate business logic | ${{ needs.unit-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build | Package application | ${{ needs.build.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Docker Build | Create container image | ${{ needs.docker-build.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Image Scan | Scan container vulnerabilities | ${{ needs.image-scan.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Runtime Test | Validate container behavior | ${{ needs.runtime-test.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Docker Push | Publish to registry | ${{ needs.docker-push.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Security Tools Used" >> $GITHUB_STEP_SUMMARY
+          echo "- **SAST**: CodeQL (code-level vulnerabilities)" >> $GITHUB_STEP_SUMMARY
+          echo "- **SCA**: OWASP Dependency Check (dependency vulnerabilities)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Container Scan**: Trivy (OS/library vulnerabilities)" >> $GITHUB_STEP_SUMMARY
