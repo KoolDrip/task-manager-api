@@ -1,0 +1,215 @@
+name: CD Pipeline
+
+# Trigger after CI completes or manual dispatch
+on:
+  workflow_run:
+    workflows: ["CI Pipeline"]
+    types:
+      - completed
+    branches:
+      - master
+      - main
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+      image_tag:
+        description: 'Docker image tag to deploy'
+        required: false
+        default: 'latest'
+
+env:
+  DOCKER_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/task-manager-api
+  KUBE_NAMESPACE: task-manager
+
+jobs:
+  # ============================================
+  # Stage 1: Prepare Deployment
+  # ============================================
+  prepare:
+    name: Prepare Deployment
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+    outputs:
+      image_tag: ${{ steps.set-tag.outputs.tag }}
+      environment: ${{ steps.set-env.outputs.env }}
+    steps:
+      - name: Set Image Tag
+        id: set-tag
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "tag=${{ github.event.inputs.image_tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${{ github.event.workflow_run.head_sha }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Set Environment
+        id: set-env
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "env=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
+          else
+            echo "env=staging" >> $GITHUB_OUTPUT
+          fi
+
+  # ============================================
+  # Stage 2: Deploy to Kubernetes
+  # ============================================
+  deploy:
+    name: Deploy to Kubernetes
+    runs-on: ubuntu-latest
+    needs: prepare
+    environment: ${{ needs.prepare.outputs.environment }}
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'v1.28.0'
+
+      - name: Configure Kubernetes Context
+        run: |
+          mkdir -p $HOME/.kube
+          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > $HOME/.kube/config
+          chmod 600 $HOME/.kube/config
+
+      - name: Create Namespace (if not exists)
+        run: |
+          kubectl create namespace ${{ env.KUBE_NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Update Kubernetes Manifests
+        run: |
+          # Update image tag in deployment manifest
+          sed -i "s|IMAGE_PLACEHOLDER|${{ env.DOCKER_IMAGE }}:${{ needs.prepare.outputs.image_tag }}|g" k8s/deployment.yaml
+
+      - name: Deploy to Kubernetes
+        run: |
+          kubectl apply -f k8s/ -n ${{ env.KUBE_NAMESPACE }}
+          kubectl rollout status deployment/task-manager-api -n ${{ env.KUBE_NAMESPACE }} --timeout=300s
+
+      - name: Verify Deployment
+        run: |
+          echo "Checking deployment status..."
+          kubectl get pods -n ${{ env.KUBE_NAMESPACE }} -l app=task-manager-api
+          kubectl get services -n ${{ env.KUBE_NAMESPACE }}
+
+      - name: Get Service URL
+        id: service-url
+        run: |
+          # For LoadBalancer service
+          SERVICE_IP=$(kubectl get svc task-manager-api -n ${{ env.KUBE_NAMESPACE }} -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "pending")
+          if [ "$SERVICE_IP" == "pending" ] || [ -z "$SERVICE_IP" ]; then
+            # For NodePort service
+            NODE_PORT=$(kubectl get svc task-manager-api -n ${{ env.KUBE_NAMESPACE }} -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null || echo "")
+            echo "Service URL: http://<node-ip>:$NODE_PORT"
+          else
+            echo "Service URL: http://$SERVICE_IP:8080"
+          fi
+
+  # ============================================
+  # Stage 3: DAST (Dynamic Application Security Testing)
+  # Purpose: Test running application for security vulnerabilities
+  # ============================================
+  dast:
+    name: DAST - Security Scan
+    runs-on: ubuntu-latest
+    needs: deploy
+    continue-on-error: true  # DAST is informational, don't fail deployment
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Setup kubectl
+        run: |
+          mkdir -p $HOME/.kube
+          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > $HOME/.kube/config
+          chmod 600 $HOME/.kube/config
+
+      - name: Get Application URL
+        id: get-url
+        run: |
+          # Port forward for DAST scan
+          kubectl port-forward svc/task-manager-api 8080:8080 -n ${{ env.KUBE_NAMESPACE }} &
+          sleep 10
+          echo "target_url=http://localhost:8080" >> $GITHUB_OUTPUT
+
+      - name: OWASP ZAP Baseline Scan
+        uses: zaproxy/action-baseline@v0.10.0
+        with:
+          target: ${{ steps.get-url.outputs.target_url }}
+          allow_issue_writing: false
+          fail_action: false  # Don't fail on findings
+          rules_file_name: '.zap/rules.tsv'
+
+      - name: Upload DAST Report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dast-report
+          path: report_html.html
+          retention-days: 7
+
+  # ============================================
+  # Stage 4: Smoke Test in Kubernetes
+  # ============================================
+  smoke-test:
+    name: Smoke Test
+    runs-on: ubuntu-latest
+    needs: deploy
+    steps:
+      - name: Setup kubectl
+        run: |
+          mkdir -p $HOME/.kube
+          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > $HOME/.kube/config
+          chmod 600 $HOME/.kube/config
+
+      - name: Run Smoke Tests
+        run: |
+          # Port forward for testing
+          kubectl port-forward svc/task-manager-api 8080:8080 -n ${{ env.KUBE_NAMESPACE }} &
+          PF_PID=$!
+          sleep 10
+
+          echo "Testing health endpoint..."
+          curl -f http://localhost:8080/health || exit 1
+
+          echo "Testing API endpoint..."
+          curl -f http://localhost:8080/api/tasks || exit 1
+
+          echo "Smoke tests passed!"
+
+          # Cleanup port-forward
+          kill $PF_PID 2>/dev/null || true
+
+  # ============================================
+  # Stage 5: Deployment Summary
+  # ============================================
+  summary:
+    name: Deployment Summary
+    runs-on: ubuntu-latest
+    needs: [deploy, smoke-test]
+    if: always()
+    steps:
+      - name: Generate Summary
+        run: |
+          echo "# CD Pipeline Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Deployment Details" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment:** ${{ needs.prepare.outputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image:** \`${{ env.DOCKER_IMAGE }}:${{ needs.prepare.outputs.image_tag }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Namespace:** \`${{ env.KUBE_NAMESPACE }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Stage Results" >> $GITHUB_STEP_SUMMARY
+          echo "| Stage | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Deploy | ${{ needs.deploy.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Smoke Test | ${{ needs.smoke-test.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| DAST | ${{ needs.dast.result || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
